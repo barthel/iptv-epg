@@ -2,7 +2,7 @@
 
 # URL of the M3U JSON file to download
 EPG_XML_URL="https://www.tdtchannels.com/epg/TV.xml.gz"
-LOCAL_EPG_XML_FILE="tv-epg.xml"
+LOCAL_EPG_XML_FILE="_tv-epg.xml"
 
 # Download function for EPG XML
 download_epg_xml() {

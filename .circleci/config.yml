@@ -6,7 +6,6 @@ orbs:
 commands:
   setup:
     steps:
-      - checkout
       - run:
           name: delete and create dist directory
           command: |
@@ -22,14 +21,14 @@ workflows:
               only: /.*/
           context:
             - "github"
-      # - test:
-      #     requires:
-      #       - download
-      #     context:
-      #       - "github"
-      - deploy:
+      - test:
           requires:
             - download
+          context:
+            - "github"
+      - deploy:
+          requires:
+            - test
           context:
             - "github"
           filters:
@@ -39,7 +38,7 @@ workflows:
   scheduled_download_and_deploy:
     triggers:
       - schedule:
-          cron: "* 3 * * *"
+          cron: "0 3 * * *"
           filters:
             branches:
               only:
@@ -51,14 +50,14 @@ workflows:
               only: /.*/
           context:
             - "github"
-      # - test:
-      #     requires:
-      #       - download
-      #     context:
-      #       - "github"
-      - deploy:
+      - test:
           requires:
             - download
+          context:
+            - "github"
+      - deploy:
+          requires:
+            - test
           context:
             - "github"
           filters:
@@ -68,34 +67,67 @@ workflows:
 jobs:
   download:
     executor: python/default
+    resource_class: small
     steps:
+      - checkout
       - setup
       - attach_workspace:
           at: dist
+      - run:
+          name: install lxml
+          command: |
+            pip install lxml
       - run:
           name: download and extract TDT Channels EPG list
           command: |
             ./download_tdt_channels_epg_list.sh
       - run:
-          name: copy EPG XML to dist/
+          name: list
           command: |
-            cp *-epg.xml dist/
+            ls -al
+      - run:
+          name: correct XML and copy working EPG lists to dist
+          command: |
+            find . -type f -name "_*-epg.xml" | while read _file; do
+              time python correct_xml.py "${_file}"
+              _newfile=$(echo "${_file}" | sed 's/_//')
+              cp -f "${_file}" "dist/${_newfile}"
+            done
       - persist_to_workspace:
           root: dist
           paths: 
             - .
 
-  # test:
-  #   executor: python/default
-  #   steps:
-  #     - setup
-  #     - persist_to_workspace:
-  #         root: dist
-  #         paths: 
-  #           - .
+  test:
+    executor: python/default
+    resource_class: small
+    steps:
+      - setup
+      - attach_workspace:
+          at: dist
+      - run:
+          name: install xmllint
+          command: |
+            sudo apt update
+            sudo apt install libxml2-utils
+      - run:
+          name: test EPG lists with xmllint
+          no_output_timeout: 1h
+          command: |
+            for file in dist/*-epg.xml; do
+                if [ -e "${file}" ]; then
+                    echo "Verarbeite Datei: ${file}"
+                    time xmllint --noout "${file}"
+                fi
+            done
+      - persist_to_workspace:
+          root: dist
+          paths: 
+            - .
 
   deploy:
     executor: node/default
+    resource_class: small
     steps:
       - checkout
       - attach_workspace:
