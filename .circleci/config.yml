@@ -1,0 +1,155 @@
+version: 2.1
+orbs:
+  python: circleci/python@3.1.0
+  node: circleci/node@7.1.0
+
+commands:
+  setup:
+    steps:
+      - run:
+          name: delete and create dist directory
+          command: |
+            rm -rf dist
+            mkdir -p dist
+
+workflows:
+  commit_download_and_deploy:
+    jobs:
+      - download:
+          filters:
+            tags:
+              only: /.*/
+          context:
+            - "github"
+      - test:
+          requires:
+            - download
+          context:
+            - "github"
+      - deploy:
+          requires:
+            - test
+          context:
+            - "github"
+          filters:
+            branches:
+              only: main
+
+  scheduled_download_and_deploy:
+    triggers:
+      - schedule:
+          cron: "* 3 * * *"
+          filters:
+            branches:
+              only:
+                - main
+    jobs:
+      - download:
+          filters:
+            tags:
+              only: /.*/
+          context:
+            - "github"
+      - test:
+          requires:
+            - download
+          context:
+            - "github"
+      - deploy:
+          requires:
+            - test
+          context:
+            - "github"
+          filters:
+            branches:
+              only: main
+
+jobs:
+  download:
+    executor: python/default
+    resource_class: small
+    steps:
+      - checkout
+      - setup
+      - attach_workspace:
+          at: dist
+      - run:
+          name: install lxml
+          command: |
+            pip install lxml
+      - run:
+          name: download and extract TDT Channels EPG list
+          command: |
+            ./download_tdt_channels_epg_list.sh
+      - run:
+          name: list
+          command: |
+            ls -al
+      - run:
+          name: correct XML and copy working EPG lists to dist
+          command: |
+            find . -type f -name "_*-epg.xml" | while read _file; do
+              time python correct_xml.py "${_file}"
+              _newfile=$(echo "${_file}" | sed 's/_//')
+              cp -f "${_file}" "dist/${_newfile}"
+            done
+      - persist_to_workspace:
+          root: dist
+          paths: 
+            - .
+
+  test:
+    executor: python/default
+    resource_class: small
+    steps:
+      - setup
+      - attach_workspace:
+          at: dist
+      - run:
+          name: install xmllint
+          command: |
+            sudo apt update
+            sudo apt install libxml2-utils
+      - run:
+          name: test EPG lists with xmllint
+          no_output_timeout: 1h
+          command: |
+            for file in dist/*-epg.xml; do
+                if [ -e "${file}" ]; then
+                    echo "Verarbeite Datei: ${file}"
+                    time xmllint --noout "${file}"
+                fi
+            done
+      - persist_to_workspace:
+          root: dist
+          paths: 
+            - .
+
+  deploy:
+    executor: node/default
+    resource_class: small
+    steps:
+      - checkout
+      - attach_workspace:
+          at: dist
+      - run:
+          name: install gh-pages
+          command: |
+            npm install --silent gh-pages
+      - run:
+          name: setup git environments
+          command: |
+            git config user.email "circle-ci@users.noreply.github.com"
+            git config user.name "circle-ci"
+      - add_ssh_keys:
+          fingerprints:
+            - "05:c7:d6:37:87:d8:f6:6c:6b:63:35:ff:f6:39:88:90"
+      - run:
+          name: deploy to gh-pages branch
+          command: |
+            npx gh-pages \
+            --message "[skip ci] Updated by ${CIRCLE_BUILD_URL}" \
+            -d dist
+          environment:
+            CACHE_DIR: /tmp
+            NODE_DEBUG: gh-pages
